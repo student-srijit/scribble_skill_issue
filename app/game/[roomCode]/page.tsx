@@ -54,6 +54,7 @@ export default function GamePage() {
     drawingData,
     ghostFrames,
     voteCounts,
+    voiceSignals,
     lastRoundScores,
     lastPrompt,
     lastDrawerId,
@@ -66,6 +67,7 @@ export default function GamePage() {
     usePowerup,
     requestDrawTip,
     submitVote,
+    sendVoiceSignal,
   } = useGameState(roomCode, user?._id || '', playerInfo)
 
   const [currentGuess, setCurrentGuess] = useState('')
@@ -83,6 +85,10 @@ export default function GamePage() {
   const [isListening, setIsListening] = useState(false)
   const [showReplay, setShowReplay] = useState(false)
   const [replayIndex, setReplayIndex] = useState(0)
+  const [voiceEnabled, setVoiceEnabled] = useState(false)
+  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({})
+  const localStreamRef = useRef<MediaStream | null>(null)
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
 
   const accessoryEmoji = {
     none: '✨',
@@ -141,6 +147,107 @@ export default function GamePage() {
     }, 200)
     return () => clearInterval(timer)
   }, [showReplay, ghostFrames])
+
+  const ensurePeerConnection = (peerId: string, initiate: boolean) => {
+    if (peerConnectionsRef.current.has(peerId)) {
+      return peerConnectionsRef.current.get(peerId)!
+    }
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    })
+
+    peerConnectionsRef.current.set(peerId, pc)
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignal(peerId, { type: 'candidate', candidate: event.candidate })
+      }
+    }
+
+    pc.ontrack = (event) => {
+      const stream = event.streams[0]
+      setRemoteStreams(prev => ({ ...prev, [peerId]: stream }))
+    }
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        pc.addTrack(track, localStreamRef.current!)
+      })
+    }
+
+    if (initiate) {
+      pc.createOffer()
+        .then(offer => pc.setLocalDescription(offer))
+        .then(() => {
+          sendSignal(peerId, { type: 'offer', offer: pc.localDescription })
+        })
+        .catch(console.error)
+    }
+
+    return pc
+  }
+
+  useEffect(() => {
+    if (!voiceEnabled || !user?._id) return
+
+    const startVoice = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        localStreamRef.current = stream
+
+        players
+          .filter(player => player.id !== user._id)
+          .forEach(player => {
+            const shouldInitiate = user._id < player.id
+            ensurePeerConnection(player.id, shouldInitiate)
+          })
+      } catch (error) {
+        console.error(error)
+        setVoiceEnabled(false)
+      }
+    }
+
+    startVoice()
+
+    return () => {
+      localStreamRef.current?.getTracks().forEach(track => track.stop())
+      localStreamRef.current = null
+      peerConnectionsRef.current.forEach(pc => pc.close())
+      peerConnectionsRef.current.clear()
+      setRemoteStreams({})
+    }
+  }, [voiceEnabled, players, user?._id])
+
+  useEffect(() => {
+    if (!voiceEnabled || !voiceSignals || voiceSignals.length === 0) return
+
+    voiceSignals.forEach(signal => {
+      const from = signal.from
+      const payload = signal.signal
+      const pc = ensurePeerConnection(from, false)
+
+      if (payload.type === 'offer') {
+        pc.setRemoteDescription(payload.offer)
+          .then(() => pc.createAnswer())
+          .then(answer => pc.setLocalDescription(answer))
+          .then(() => sendSignal(from, { type: 'answer', answer: pc.localDescription }))
+          .catch(console.error)
+      }
+
+      if (payload.type === 'answer') {
+        pc.setRemoteDescription(payload.answer).catch(console.error)
+      }
+
+      if (payload.type === 'candidate') {
+        pc.addIceCandidate(payload.candidate).catch(console.error)
+      }
+    })
+  }, [voiceEnabled, voiceSignals])
+
+  const sendSignal = (to: string, signal: any) => {
+    sendVoiceSignal(to, signal)
+  }
 
   const lastDrawerName = players.find(player => player.id === lastDrawerId)?.name || 'Unknown'
 
@@ -395,6 +502,21 @@ export default function GamePage() {
 
           {/* Sidebar */}
           <div className="space-y-6">
+            <div className="glossy-card p-4">
+              <h3 className="font-bold text-glow mb-3">Voice Chat</h3>
+              <p className="text-xs text-gray-400 mb-3">
+                {voiceEnabled ? 'Mic is live' : 'Mic is muted'} • Connected: {Object.keys(remoteStreams).length}
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => setVoiceEnabled(prev => !prev)}
+                  className={`w-full px-4 py-2 rounded-lg text-sm font-semibold ${voiceEnabled ? 'bg-emerald-500/80 text-white' : 'bg-white/10 text-gray-200 hover:bg-white/20'}`}
+                >
+                  {voiceEnabled ? 'Mute Mic' : 'Unmute Mic'}
+                </button>
+              </div>
+            </div>
+
             {/* Players */}
             <div className="glossy-card p-4">
               <h3 className="font-bold text-glow mb-4">Players</h3>
@@ -578,6 +700,75 @@ export default function GamePage() {
           maxRounds={maxRounds}
         />
       )}
+
+      {gameState === 'round-end' && ghostFrames && ghostFrames.length > 0 && (
+        <div className="fixed inset-x-0 bottom-6 flex justify-center z-40">
+          <button
+            onClick={() => setShowReplay(true)}
+            className="px-4 py-2 rounded-full bg-white/10 text-xs text-gray-200 hover:bg-white/20"
+          >
+            ▶️ Replay Drawing
+          </button>
+        </div>
+      )}
+
+      {showReplay && ghostFrames && ghostFrames.length > 0 && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="glossy-card max-w-2xl w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-glow">Ghost Replay</h3>
+              <button
+                onClick={() => setShowReplay(false)}
+                className="text-sm text-gray-300 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+            <div className="bg-slate-900/60 rounded-xl p-3">
+              <img
+                src={ghostFrames[replayIndex]}
+                alt="Replay frame"
+                className="w-full h-80 object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {gameState === 'round-end' && audienceMode && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-40 p-4">
+          <div className="glossy-card max-w-xl w-full p-6">
+            <h3 className="text-xl font-bold text-glow mb-4">Audience Vote</h3>
+            <p className="text-sm text-gray-400 mb-4">Vote for the best drawing!</p>
+            <div className="space-y-2">
+              {players.map(player => (
+                <button
+                  key={player.id}
+                  onClick={() => submitVote(player.id)}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-lg bg-white/10 hover:bg-white/20"
+                >
+                  <span className="font-semibold">{player.name}</span>
+                  <span className="text-xs text-gray-300">Votes: {voteCounts?.[player.id] || 0}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="hidden">
+        {Object.entries(remoteStreams).map(([id, stream]) => (
+          <audio
+            key={id}
+            autoPlay
+            ref={(el) => {
+              if (el && el.srcObject !== stream) {
+                el.srcObject = stream
+              }
+            }}
+          />
+        ))}
+      </div>
 
       {gameState === 'round-end' && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-full max-w-3xl px-4">

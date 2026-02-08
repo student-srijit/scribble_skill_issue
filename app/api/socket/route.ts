@@ -54,6 +54,7 @@ interface RoomState {
   ghostFrames: string[]
   votes: Record<string, string>
   voteCounts: Record<string, number>
+  voiceSignals: Array<{ to: string; from: string; signal: any }>
   lastRoundScores: Record<string, number>
   lastPrompt: string
   lastDrawerId: string | null
@@ -122,6 +123,7 @@ function createRoom(roomCode: string): RoomState {
     ghostFrames: [],
     votes: {},
     voteCounts: {},
+    voiceSignals: [],
     lastRoundScores: {},
     lastPrompt: '',
     lastDrawerId: null,
@@ -295,6 +297,10 @@ export async function GET(request: NextRequest) {
   const maskedPrompt = currentPrompt
     ? maskPrompt(currentPrompt.answer, room.revealCount)
     : ''
+  const voiceSignals = room.voiceSignals.filter(signal => signal.to === userId)
+  if (voiceSignals.length > 0) {
+    room.voiceSignals = room.voiceSignals.filter(signal => signal.to !== userId)
+  }
 
   return NextResponse.json({
     success: true,
@@ -331,6 +337,7 @@ export async function GET(request: NextRequest) {
       lastDrawerId: room.lastDrawerId,
       ghostFrames: room.ghostFrames,
       voteCounts: room.voteCounts,
+      voiceSignals,
     },
   })
 }
@@ -550,6 +557,15 @@ export async function POST(request: NextRequest) {
 
     case 'round-time-ended': {
       endRound(room)
+      break
+    }
+
+    case 'voice-signal': {
+      const to = data?.to as string
+      const signal = data?.signal
+      if (to && signal) {
+        room.voiceSignals.push({ to, from: userId, signal })
+      }
       break
     }
 

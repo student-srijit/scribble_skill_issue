@@ -46,6 +46,7 @@ export interface GameRoomState {
   drawingData?: string | null
   ghostFrames?: string[]
   voteCounts?: Record<string, number>
+  voiceSignals?: Array<{ to: string; from: string; signal: any }>
   lastRoundScores?: Record<string, number>
   lastPrompt?: string
   lastDrawerId?: string | null
@@ -86,6 +87,7 @@ export function useGameState(
     drawingData: null,
     ghostFrames: [],
     voteCounts: {},
+    voiceSignals: [],
     lastRoundScores: {},
     lastPrompt: '',
     lastDrawerId: null,
@@ -183,6 +185,10 @@ export function useGameState(
     gameSocket.send('submit-vote', { playerId })
   }, [])
 
+  const sendVoiceSignal = useCallback((to: string, signal: any) => {
+    gameSocket.send('voice-signal', { to, signal })
+  }, [])
+
   return {
     ...gameState,
     connected,
@@ -195,5 +201,6 @@ export function useGameState(
     usePowerup,
     requestDrawTip,
     submitVote,
+    sendVoiceSignal,
   }
 }
