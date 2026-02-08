@@ -36,7 +36,13 @@ export async function POST(request: NextRequest) {
     // Check if player already in room
     const playerExists = room.players.some((p: any) => p.id === userId)
     if (playerExists) {
-      return NextResponse.json({ error: 'Already in room' }, { status: 400 })
+      return NextResponse.json(
+        {
+          success: true,
+          room,
+        },
+        { status: 200 }
+      )
     }
 
     // Add player to room
