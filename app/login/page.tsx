@@ -21,7 +21,13 @@ export default function LoginPage() {
 
     try {
       await login(username);
-      router.push('/lobby');
+      const pendingRoom = typeof window !== 'undefined' ? localStorage.getItem('pendingRoom') : null;
+      if (pendingRoom) {
+        localStorage.removeItem('pendingRoom');
+        router.push(`/game/${pendingRoom}`);
+      } else {
+        router.push('/lobby');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

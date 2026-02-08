@@ -86,6 +86,12 @@ function normalizeAnswer(value: string) {
   return value.trim().toLowerCase()
 }
 
+function isShortDrawable(prompt: PromptItem) {
+  const words = prompt.answer.trim().split(/\s+/)
+  const letterCount = prompt.answer.replace(/\s+/g, '').length
+  return words.length <= 1 && letterCount <= 14
+}
+
 function createRoom(roomCode: string): RoomState {
   return {
     roomCode,
@@ -155,7 +161,7 @@ function assignTeam(room: RoomState, playerId: string) {
 }
 
 async function ensurePromptPool(room: RoomState, needed: number) {
-  const available = room.promptPool.filter(p => !room.usedAnswers.has(normalizeAnswer(p.answer)))
+  const available = room.promptPool.filter(p => !room.usedAnswers.has(normalizeAnswer(p.answer)) && isShortDrawable(p))
   if (available.length >= needed) return
 
   try {
@@ -173,7 +179,7 @@ async function ensurePromptPool(room: RoomState, needed: number) {
     // ignore AI errors and fallback
   }
 
-  while (room.promptPool.filter(p => !room.usedAnswers.has(normalizeAnswer(p.answer))).length < needed) {
+  while (room.promptPool.filter(p => !room.usedAnswers.has(normalizeAnswer(p.answer)) && isShortDrawable(p)).length < needed) {
     const generated = generatePromptFromIndex(room.promptSeed++)
     if (!room.usedAnswers.has(normalizeAnswer(generated.answer))) {
       room.promptPool.push(generated)
@@ -183,7 +189,7 @@ async function ensurePromptPool(room: RoomState, needed: number) {
 
 async function pickWordChoices(room: RoomState, count = room.wordChoiceCount) {
   await ensurePromptPool(room, count)
-  const available = room.promptPool.filter(p => !room.usedAnswers.has(normalizeAnswer(p.answer)))
+  const available = room.promptPool.filter(p => !room.usedAnswers.has(normalizeAnswer(p.answer)) && isShortDrawable(p))
   const shuffled = [...available].sort(() => Math.random() - 0.5)
   room.wordChoices = shuffled.slice(0, count)
 }

@@ -29,7 +29,13 @@ export default function SignupPage() {
 
     try {
       await signup(username, selectedCharacter, characterStyle);
-      router.push('/lobby');
+      const pendingRoom = typeof window !== 'undefined' ? localStorage.getItem('pendingRoom') : null;
+      if (pendingRoom) {
+        localStorage.removeItem('pendingRoom');
+        router.push(`/game/${pendingRoom}`);
+      } else {
+        router.push('/lobby');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Signup failed');
     } finally {

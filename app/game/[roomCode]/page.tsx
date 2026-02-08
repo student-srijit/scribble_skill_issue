@@ -85,7 +85,9 @@ export default function GamePage() {
   const [isListening, setIsListening] = useState(false)
   const [showReplay, setShowReplay] = useState(false)
   const [replayIndex, setReplayIndex] = useState(0)
-  const [voiceEnabled, setVoiceEnabled] = useState(false)
+  const [voiceJoined, setVoiceJoined] = useState(false)
+  const [micEnabled, setMicEnabled] = useState(false)
+  const [voiceError, setVoiceError] = useState('')
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({})
   const localStreamRef = useRef<MediaStream | null>(null)
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
@@ -100,6 +102,9 @@ export default function GamePage() {
 
   useEffect(() => {
     if (!user) {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('pendingRoom', roomCode)
+      }
       router.push('/login')
     }
   }, [user, router])
@@ -189,12 +194,18 @@ export default function GamePage() {
   }
 
   useEffect(() => {
-    if (!voiceEnabled || !user?._id) return
+    if (!voiceJoined || !user?._id) return
 
     const startVoice = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        localStreamRef.current = stream
+        setVoiceError('')
+        if (!localStreamRef.current) {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+          stream.getAudioTracks().forEach(track => {
+            track.enabled = micEnabled
+          })
+          localStreamRef.current = stream
+        }
 
         players
           .filter(player => player.id !== user._id)
@@ -202,9 +213,11 @@ export default function GamePage() {
             const shouldInitiate = user._id < player.id
             ensurePeerConnection(player.id, shouldInitiate)
           })
-      } catch (error) {
+      } catch (error: any) {
         console.error(error)
-        setVoiceEnabled(false)
+        setVoiceError('Microphone blocked')
+        setVoiceJoined(false)
+        setMicEnabled(false)
       }
     }
 
@@ -217,10 +230,17 @@ export default function GamePage() {
       peerConnectionsRef.current.clear()
       setRemoteStreams({})
     }
-  }, [voiceEnabled, players, user?._id])
+  }, [voiceJoined, players, user?._id])
 
   useEffect(() => {
-    if (!voiceEnabled || !voiceSignals || voiceSignals.length === 0) return
+    if (!localStreamRef.current) return
+    localStreamRef.current.getAudioTracks().forEach(track => {
+      track.enabled = micEnabled
+    })
+  }, [micEnabled])
+
+  useEffect(() => {
+    if (!voiceJoined || !voiceSignals || voiceSignals.length === 0) return
 
     voiceSignals.forEach(signal => {
       const from = signal.from
@@ -243,7 +263,7 @@ export default function GamePage() {
         pc.addIceCandidate(payload.candidate).catch(console.error)
       }
     })
-  }, [voiceEnabled, voiceSignals])
+  }, [voiceJoined, voiceSignals])
 
   const sendSignal = (to: string, signal: any) => {
     sendVoiceSignal(to, signal)
@@ -505,15 +525,29 @@ export default function GamePage() {
             <div className="glossy-card p-4">
               <h3 className="font-bold text-glow mb-3">Voice Chat</h3>
               <p className="text-xs text-gray-400 mb-3">
-                {voiceEnabled ? 'Mic is live' : 'Mic is muted'} • Connected: {Object.keys(remoteStreams).length}
+                {micEnabled ? 'Mic is live' : 'Mic is muted'} • Connected: {Object.keys(remoteStreams).length}
               </p>
+              {voiceError && (
+                <p className="text-xs text-red-300 mb-2">{voiceError}</p>
+              )}
               <div className="flex flex-col gap-2">
                 <button
-                  onClick={() => setVoiceEnabled(prev => !prev)}
-                  className={`w-full px-4 py-2 rounded-lg text-sm font-semibold ${voiceEnabled ? 'bg-emerald-500/80 text-white' : 'bg-white/10 text-gray-200 hover:bg-white/20'}`}
+                  onClick={async () => {
+                    if (!voiceJoined) {
+                      setVoiceJoined(true)
+                      setMicEnabled(true)
+                      return
+                    }
+                    setMicEnabled(prev => !prev)
+                  }}
+                  disabled={players.length < 2}
+                  className={`w-full px-4 py-2 rounded-lg text-sm font-semibold ${micEnabled ? 'bg-emerald-500/80 text-white' : 'bg-white/10 text-gray-200 hover:bg-white/20'} disabled:opacity-50`}
                 >
-                  {voiceEnabled ? 'Mute Mic' : 'Unmute Mic'}
+                  {micEnabled ? 'Mute Mic' : 'Unmute Mic'}
                 </button>
+                {players.length < 2 && (
+                  <p className="text-[11px] text-gray-500">Need at least 2 players to use voice.</p>
+                )}
               </div>
             </div>
 

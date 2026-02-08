@@ -12,6 +12,16 @@ export default function CharactersPage() {
     updateCharacter(characterId);
   };
 
+  const handleContinue = () => {
+    const pendingRoom = typeof window !== 'undefined' ? localStorage.getItem('pendingRoom') : null;
+    if (pendingRoom) {
+      localStorage.removeItem('pendingRoom');
+      router.push(`/game/${pendingRoom}`);
+    } else {
+      router.push('/lobby');
+    }
+  };
+
   const handleStyleChange = (style: CharacterStyle) => {
     updateCharacterStyle(style);
   };
@@ -40,10 +50,10 @@ export default function CharactersPage() {
 
         <div className="mt-8 text-center">
           <button
-            onClick={() => router.push('/lobby')}
+            onClick={handleContinue}
             className="glossy-button px-6 py-2"
           >
-            Save & Back to Lobby
+            Continue
           </button>
         </div>
       </div>

@@ -51,7 +51,7 @@ export async function generatePromptIdeas(existingAnswers: string[], count = 6) 
     {
       role: 'system',
       content:
-        'You generate drawable prompts for a scribble game. Return only JSON with shape: {"prompts":[{"answer":"Cat wearing sunglasses","display":"Cat wearing sunglasses","twist":true,"difficulty":"easy","category":"animals"}]}. The answer must exactly match display. Avoid repeats of answers provided.',
+        'You generate drawable prompts for a scribble game. Return only JSON with shape: {"prompts":[{"answer":"Giraffe","display":"Giraffe","twist":false,"difficulty":"easy","category":"animals"}]}. The answer must exactly match display. Prompts must be exactly 1 word, easy to draw, and avoid repeats of answers provided.',
     },
     {
       role: 'user',
