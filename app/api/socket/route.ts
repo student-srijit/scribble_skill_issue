@@ -314,25 +314,52 @@ function createRoom(roomCode: string): RoomState {
   }
 }
 
-async function getRoom(roomCode: string) {
+async function getRoom(roomCode: string): Promise<RoomState | null> {
   if (activeRooms.has(roomCode)) {
     return activeRooms.get(roomCode)!
   }
 
-  const fromDb = await loadRoomState(roomCode)
-  if (fromDb) {
-    activeRooms.set(roomCode, fromDb)
-    return fromDb
+  const db = await getDatabase()
+  const rooms = db.collection('rooms')
+  const roomDoc = await rooms.findOne({ roomCode })
+  if (!roomDoc) {
+    return null
   }
 
-  const created = createRoom(roomCode)
-  activeRooms.set(roomCode, created)
-  await updateRoomInDb(roomCode, {
-    liveState: serializeRoomState(created),
-    liveStateVersion: created.liveStateVersion,
-    updatedAt: new Date(),
-  })
-  return created
+  if (roomDoc.liveState) {
+    const hydrated = hydrateRoomState(roomCode, roomDoc.liveState)
+    hydrated.liveStateVersion = Number(roomDoc.liveStateVersion || hydrated.liveStateVersion || 1)
+    activeRooms.set(roomCode, hydrated)
+    return hydrated
+  }
+
+  const seeded = createRoom(roomCode)
+  if (Array.isArray(roomDoc.players)) {
+    seeded.players = roomDoc.players.map((player: any) => ({
+      id: player.id,
+      name: player.name,
+      character: player.character,
+      characterStyle: player.characterStyle,
+      score: Number(player.score || 0),
+      guessed: false,
+    }))
+  }
+  if (roomDoc.maxRounds) {
+    seeded.maxRounds = Math.min(Math.max(Number(roomDoc.maxRounds), 3), 20)
+  }
+  if (roomDoc.currentRound !== undefined) {
+    seeded.currentRound = Math.max(0, Number(roomDoc.currentRound || 0))
+  }
+  if (roomDoc.status === 'playing') {
+    seeded.gameState = 'choosing'
+    seeded.choosingStartedAt = Date.now()
+  } else if (roomDoc.status === 'finished') {
+    seeded.gameState = 'finished'
+  }
+
+  activeRooms.set(roomCode, seeded)
+  await saveRoomState(seeded)
+  return seeded
 }
 
 function getDrawer(room: RoomState) {
@@ -535,6 +562,9 @@ export async function GET(request: NextRequest) {
   }
 
   const room = await getRoom(roomCode)
+  if (!room) {
+    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+  }
 
   if (room.players.some(player => player.id === userId)) {
     touchPlayer(room, userId)
@@ -613,6 +643,9 @@ export async function POST(request: NextRequest) {
   }
 
   const room = await getRoom(roomCode)
+  if (!room) {
+    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+  }
   await pruneInactivePlayers(room)
   if (room.players.some(player => player.id === userId)) {
     touchPlayer(room, userId)
