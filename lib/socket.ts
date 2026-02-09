@@ -21,7 +21,9 @@ class GameSocket {
     if (!this.roomCode || !this.userId) return
     const poll = async () => {
       try {
-        const res = await fetch(`/api/socket?room=${this.roomCode}&user=${this.userId}`)
+        const res = await fetch(`/api/socket?room=${this.roomCode}&user=${this.userId}`, {
+          cache: 'no-store',
+        })
         const data = (await res.json()) as GameStateResponse
         if (data.state) {
           this.emit('state-sync', data.state)
@@ -48,6 +50,7 @@ class GameSocket {
       const res = await fetch('/api/socket', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
         body: JSON.stringify({ type, roomCode: this.roomCode, userId: this.userId, data }),
       })
 

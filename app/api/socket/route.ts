@@ -6,6 +6,8 @@ import { getDatabase } from '@/lib/db'
 
 type GameState = 'waiting' | 'choosing' | 'drawing' | 'round-end' | 'finished'
 
+export const dynamic = 'force-dynamic'
+
 interface PlayerState {
   id: string
   name: string
@@ -21,6 +23,8 @@ interface PlayerState {
 
 interface RoomState {
   roomCode: string
+  hostId: string | null
+  hostName: string | null
   players: PlayerState[]
   gameState: GameState
   currentDrawer: number
@@ -266,6 +270,8 @@ function isShortDrawable(prompt: PromptItem) {
 function createRoom(roomCode: string): RoomState {
   return {
     roomCode,
+    hostId: null,
+    hostName: null,
     players: [],
     gameState: 'waiting',
     currentDrawer: 0,
@@ -558,12 +564,12 @@ export async function GET(request: NextRequest) {
   const userId = request.nextUrl.searchParams.get('user')
 
   if (!roomCode || !userId) {
-    return NextResponse.json({ error: 'Missing parameters' }, { status: 400 })
+    return NextResponse.json({ error: 'Missing parameters' }, { status: 400, headers: { 'Cache-Control': 'no-store' } })
   }
 
   const room = await getRoom(roomCode)
   if (!room) {
-    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+    return NextResponse.json({ error: 'Room not found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } })
   }
 
   if (room.players.some(player => player.id === userId)) {
@@ -632,19 +638,19 @@ export async function GET(request: NextRequest) {
       voteCounts: room.voteCounts,
       voiceSignals,
     },
-  })
+  }, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function POST(request: NextRequest) {
   const { type, roomCode, userId, data } = await request.json()
 
   if (!roomCode || !userId) {
-    return NextResponse.json({ error: 'Missing parameters' }, { status: 400 })
+    return NextResponse.json({ error: 'Missing parameters' }, { status: 400, headers: { 'Cache-Control': 'no-store' } })
   }
 
   const room = await getRoom(roomCode)
   if (!room) {
-    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+    return NextResponse.json({ error: 'Room not found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } })
   }
   await pruneInactivePlayers(room)
   if (room.players.some(player => player.id === userId)) {
@@ -691,7 +697,7 @@ export async function POST(request: NextRequest) {
 
     case 'start-game': {
       if (room.players.length < MIN_PLAYERS_TO_START) {
-        return NextResponse.json({ error: 'Not enough players' }, { status: 400 })
+        return NextResponse.json({ error: 'Not enough players' }, { status: 400, headers: { 'Cache-Control': 'no-store' } })
       }
       if (data?.maxRounds) {
         room.maxRounds = Math.min(Math.max(Number(data.maxRounds), 3), 20)
@@ -952,5 +958,5 @@ export async function POST(request: NextRequest) {
       lastPrompt: room.lastPrompt,
       lastDrawerId: room.lastDrawerId,
     },
-  })
+  }, { headers: { 'Cache-Control': 'no-store' } })
 }

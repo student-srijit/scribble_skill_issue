@@ -18,6 +18,8 @@ export interface Player {
 
 export interface GameRoomState {
   roomCode: string
+  hostId?: string | null
+  hostName?: string | null
   players: Player[]
   currentDrawer: number
   promptDisplay: string
@@ -62,6 +64,8 @@ export function useGameState(
 ) {
   const [gameState, setGameState] = useState<GameRoomState>({
     roomCode,
+    hostId: null,
+    hostName: null,
     players: [],
     currentDrawer: 0,
     promptDisplay: '',

@@ -64,6 +64,8 @@ export default function GamePage() {
     currentTheme,
     themeMode: serverThemeMode,
     selectedTheme: serverSelectedTheme,
+    hostId,
+    hostName,
     teamScores,
     teams,
     streaks,
@@ -335,6 +337,7 @@ export default function GamePage() {
   }
 
   const lastDrawerName = players.find(player => player.id === lastDrawerId)?.name || 'Unknown'
+  const isHost = hostId ? hostId === user?._id : players[0]?.id === user?._id
   const handleContinue = () => {
     if (currentRound >= maxRounds) {
       router.push(`/results/${roomCode}`)
@@ -384,10 +387,10 @@ export default function GamePage() {
               <div className="glossy-card p-8 text-center h-96 flex flex-col items-center justify-center">
                 <div className="text-5xl mb-4">🎨</div>
                 <h2 className="text-2xl font-bold text-glow mb-4">
-                  {players[0]?.id === user?._id ? 'Game Settings' : 'Waiting for host to start'}
+                  {isHost ? 'Game Settings' : 'Waiting for host to start'}
                 </h2>
 
-                {players[0]?.id === user?._id ? (
+                {isHost ? (
                   <div className="w-full max-w-2xl mx-auto space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
