@@ -125,6 +125,17 @@ export default function GamePage() {
     halo: '😇',
   }
 
+  const attachLocalTracks = (pc: RTCPeerConnection) => {
+    const stream = localStreamRef.current
+    if (!stream) return
+    const senderTrackIds = pc.getSenders().map(sender => sender.track?.id).filter(Boolean) as string[]
+    stream.getTracks().forEach(track => {
+      if (!senderTrackIds.includes(track.id)) {
+        pc.addTrack(track, stream)
+      }
+    })
+  }
+
   useEffect(() => {
     if (!isLoading && !user) {
       if (typeof window !== 'undefined') {
@@ -208,11 +219,7 @@ export default function GamePage() {
       setRemoteStreams(prev => ({ ...prev, [peerId]: stream }))
     }
 
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
-        pc.addTrack(track, localStreamRef.current!)
-      })
-    }
+    attachLocalTracks(pc)
 
     if (initiate) {
       pc.createOffer()
@@ -232,20 +239,21 @@ export default function GamePage() {
     const startVoice = async () => {
       try {
         setVoiceError('')
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setVoiceError('Microphone not supported')
+          setVoiceJoined(false)
+          setMicEnabled(false)
+          return
+        }
+
         if (!localStreamRef.current) {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
           stream.getAudioTracks().forEach(track => {
             track.enabled = micEnabled
           })
           localStreamRef.current = stream
+          peerConnectionsRef.current.forEach(pc => attachLocalTracks(pc))
         }
-
-        players
-          .filter(player => player.id !== user._id)
-          .forEach(player => {
-            const shouldInitiate = user._id < player.id
-            ensurePeerConnection(player.id, shouldInitiate)
-          })
       } catch (error: any) {
         console.error(error)
         setVoiceError('Microphone blocked')
@@ -263,6 +271,30 @@ export default function GamePage() {
       peerConnectionsRef.current.clear()
       setRemoteStreams({})
     }
+  }, [voiceJoined, user?._id])
+
+  useEffect(() => {
+    if (!voiceJoined || !user?._id) return
+    const peerIds = players.filter(player => player.id !== user._id).map(player => player.id)
+
+    // Remove peers that left
+    peerConnectionsRef.current.forEach((pc, peerId) => {
+      if (!peerIds.includes(peerId)) {
+        pc.close()
+        peerConnectionsRef.current.delete(peerId)
+        setRemoteStreams(prev => {
+          const next = { ...prev }
+          delete next[peerId]
+          return next
+        })
+      }
+    })
+
+    // Add peers that joined
+    peerIds.forEach(peerId => {
+      const shouldInitiate = user._id < peerId
+      ensurePeerConnection(peerId, shouldInitiate)
+    })
   }, [voiceJoined, players, user?._id])
 
   useEffect(() => {

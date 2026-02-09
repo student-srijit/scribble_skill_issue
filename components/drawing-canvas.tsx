@@ -25,6 +25,7 @@ export const DrawingCanvas = forwardRef<
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawingLocal, setIsDrawingLocal] = useState(false);
   const [context, setContext] = useState<CanvasRenderingContext2D | null>(null);
+  const pointerIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -49,6 +50,7 @@ export const DrawingCanvas = forwardRef<
       ctx.lineJoin = 'round';
       ctx.lineWidth = strokeWidth;
       ctx.strokeStyle = strokeColor;
+      ctx.fillStyle = strokeColor;
 
       if (snapshot && snapshot !== 'data:,') {
         const image = new Image();
@@ -85,6 +87,7 @@ export const DrawingCanvas = forwardRef<
     if (context) {
       context.lineWidth = strokeWidth;
       context.strokeStyle = strokeColor;
+      context.fillStyle = strokeColor;
       context.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
     }
   }, [context, strokeColor, strokeWidth, tool]);
@@ -92,8 +95,13 @@ export const DrawingCanvas = forwardRef<
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing || !context) return;
 
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.setPointerCapture(e.pointerId);
+    pointerIdRef.current = e.pointerId;
+
     setIsDrawingLocal(true);
-    const rect = canvasRef.current?.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     if (!rect) return;
 
     const x = e.clientX - rect.left;
@@ -101,10 +109,17 @@ export const DrawingCanvas = forwardRef<
 
     context.beginPath();
     context.moveTo(x, y);
+
+    // Draw a dot on pointer down so clicks register.
+    const radius = Math.max(1, context.lineWidth / 2);
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fill();
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawingLocal || !context) return;
+    if (pointerIdRef.current !== e.pointerId) return;
 
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -116,8 +131,13 @@ export const DrawingCanvas = forwardRef<
     context.stroke();
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e && pointerIdRef.current !== null && e.pointerId !== pointerIdRef.current) return;
+    if (e && canvasRef.current) {
+      canvasRef.current.releasePointerCapture(e.pointerId);
+    }
     setIsDrawingLocal(false);
+    pointerIdRef.current = null;
     if (context && onDraw) {
       onDraw(canvasRef.current?.toDataURL() || '');
     }
@@ -129,6 +149,7 @@ export const DrawingCanvas = forwardRef<
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onPointerLeave={handlePointerUp}
       className="w-full h-full bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl cursor-crosshair border border-purple-500/20"
     />
