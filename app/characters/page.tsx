@@ -1,12 +1,20 @@
+
 'use client';
 
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/app/context/auth-context';
 import { CharacterSelector, CharacterStyle } from '@/components/character-selector';
+import { useEffect } from 'react';
 
 export default function CharactersPage() {
   const router = useRouter();
   const { user, isLoading, updateCharacter, updateCharacterStyle } = useAuth();
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      router.push('/login');
+    }
+  }, [isLoading, user, router]);
 
   const handleCharacterSelect = (characterId: string) => {
     updateCharacter(characterId);
@@ -26,8 +34,11 @@ export default function CharactersPage() {
     updateCharacterStyle(style);
   };
 
-  if (!isLoading && !user) {
-    router.push('/login');
+  if (isLoading) {
+    return null;
+  }
+
+  if (!user) {
     return null;
   }
 

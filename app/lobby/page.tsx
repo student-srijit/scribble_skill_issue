@@ -27,7 +27,7 @@ export default function LobbyPage() {
   const [joinRoomCode, setJoinRoomCode] = useState('')
   const [isPublicRoom, setIsPublicRoom] = useState(false)
   const [maxRounds, setMaxRounds] = useState(10)
-  const [isLoading, setIsLoading] = useState(false)
+  const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState('')
   const [rooms, setRooms] = useState<GameRoom[]>([]); // Declare rooms variable
 
@@ -57,7 +57,7 @@ export default function LobbyPage() {
 
   const createRoom = async () => {
     if (!user) return
-    setIsLoading(true)
+    setIsBusy(true)
     setError('')
     try {
       const res = await fetch('/api/rooms/create', {
@@ -81,13 +81,13 @@ export default function LobbyPage() {
     } catch (err: any) {
       setError(err.message)
     } finally {
-      setIsLoading(false)
+      setIsBusy(false)
     }
   }
 
   const joinRoom = async () => {
     if (!user) return
-    setIsLoading(true)
+    setIsBusy(true)
     setError('')
     try {
       const res = await fetch('/api/rooms/join', {
@@ -110,7 +110,7 @@ export default function LobbyPage() {
     } catch (err: any) {
       setError(err.message)
     } finally {
-      setIsLoading(false)
+      setIsBusy(false)
     }
   }
 
@@ -228,10 +228,10 @@ export default function LobbyPage() {
 
               <button
                 onClick={createRoom}
-                disabled={isLoading}
+                disabled={isBusy}
                 className="glossy-button w-full disabled:opacity-50 mb-3"
               >
-                {isLoading ? 'Creating...' : 'Create Room'}
+                {isBusy ? 'Creating...' : 'Create Room'}
               </button>
               <button
                 onClick={() => setShowCreateRoom(false)}
@@ -260,10 +260,10 @@ export default function LobbyPage() {
 
               <button
                 onClick={joinRoom}
-                disabled={isLoading || joinRoomCode.length < 5}
+                disabled={isBusy || joinRoomCode.length < 5}
                 className="glossy-button w-full disabled:opacity-50 mb-3"
               >
-                {isLoading ? 'Joining...' : 'Join Room'}
+                {isBusy ? 'Joining...' : 'Join Room'}
               </button>
               <button
                 onClick={() => setShowJoinRoom(false)}
