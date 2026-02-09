@@ -23,14 +23,36 @@ export default function ResultsPage() {
   const router = useRouter()
   const params = useParams()
   const roomCode = params.roomCode as string
-  const { user } = useAuth()
+  const { user, isLoading } = useAuth()
   const [result, setResult] = useState<GameResult | null>(null)
+  const [isFetching, setIsFetching] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
+    if (isLoading) return
     if (!user) {
       router.push('/login')
+      return
     }
-  }, [user, router])
+    if (!roomCode) return
+    setIsFetching(true)
+    setError('')
+    fetch(`/api/results/${roomCode}`)
+      .then(async res => {
+        if (!res.ok) {
+          const data = await res.json()
+          throw new Error(data.error || 'Failed to load results')
+        }
+        return res.json()
+      })
+      .then(data => {
+        setResult(data.results as GameResult)
+      })
+      .catch(err => {
+        setError(err instanceof Error ? err.message : 'Failed to load results')
+      })
+      .finally(() => setIsFetching(false))
+  }, [user, isLoading, router, roomCode])
 
   const winner = result?.players[0]?.name
 
@@ -49,6 +71,16 @@ export default function ResultsPage() {
         </div>
 
         {/* Final Leaderboard */}
+        {error && (
+          <div className="glossy-card p-6 text-center text-red-300 mb-6">
+            {error}
+          </div>
+        )}
+        {isFetching && (
+          <div className="glossy-card p-6 text-center text-gray-300 mb-6">
+            Loading results...
+          </div>
+        )}
         {result && <Leaderboard entries={result.players} />}
 
         {/* Stats */}

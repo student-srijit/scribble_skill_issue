@@ -303,6 +303,13 @@ export default function GamePage() {
   }
 
   const lastDrawerName = players.find(player => player.id === lastDrawerId)?.name || 'Unknown'
+  const handleContinue = () => {
+    if (currentRound >= maxRounds) {
+      router.push(`/results/${roomCode}`)
+      return
+    }
+    nextRound()
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -796,7 +803,7 @@ export default function GamePage() {
             roundScore: lastRoundScores?.[player.id] || 0,
             guessed: player.guessed,
           }))}
-          onContinue={nextRound}
+          onContinue={handleContinue}
           currentRound={currentRound}
           maxRounds={maxRounds}
         />

@@ -6,7 +6,7 @@ import { CharacterSelector, CharacterStyle } from '@/components/character-select
 
 export default function CharactersPage() {
   const router = useRouter();
-  const { user, updateCharacter, updateCharacterStyle } = useAuth();
+  const { user, isLoading, updateCharacter, updateCharacterStyle } = useAuth();
 
   const handleCharacterSelect = (characterId: string) => {
     updateCharacter(characterId);
@@ -26,7 +26,7 @@ export default function CharactersPage() {
     updateCharacterStyle(style);
   };
 
-  if (!user) {
+  if (!isLoading && !user) {
     router.push('/login');
     return null;
   }

@@ -33,18 +33,40 @@ export const DrawingCanvas = forwardRef<
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Set canvas size
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
+    const resizeCanvas = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const snapshot = canvas.toDataURL();
 
-    // Set drawing properties
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = strokeWidth;
-    ctx.strokeStyle = strokeColor;
+      canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
 
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = strokeWidth;
+      ctx.strokeStyle = strokeColor;
+
+      if (snapshot && snapshot !== 'data:,') {
+        const image = new Image();
+        image.onload = () => {
+          ctx.drawImage(image, 0, 0, rect.width, rect.height);
+        };
+        image.src = snapshot;
+      }
+    };
+
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
     setContext(ctx);
-  }, []);
+
+    return () => {
+      window.removeEventListener('resize', resizeCanvas);
+    };
+  }, [strokeColor, strokeWidth]);
 
   useImperativeHandle(ref, () => ({
     clearCanvas: () => {

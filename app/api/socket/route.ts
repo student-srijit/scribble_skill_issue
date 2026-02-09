@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { calculateScore, validateGuess, isCloseGuess, ROUND_DURATION, MIN_PLAYERS_TO_START } from '@/lib/game-logic'
 import { DEFAULT_PROMPTS, generatePromptFromIndex, maskPrompt, PromptItem } from '@/lib/prompts'
 import { generateHint, generatePromptIdeas, moderateGuess, generateDrawerClues, generateDrawTip } from '@/lib/groq'
+import { getDatabase } from '@/lib/db'
 
 type GameState = 'waiting' | 'choosing' | 'drawing' | 'round-end' | 'finished'
 
@@ -64,6 +65,7 @@ interface RoomState {
   promptPool: PromptItem[]
   lastSeen: Record<string, number>
   privateNotices: Record<string, string>
+  liveStateVersion: number
 }
 
 const activeRooms = new Map<string, RoomState>()
@@ -87,6 +89,169 @@ const THEMES = [
 ]
 
 const PLAYER_INACTIVE_MS = 45000
+
+async function updateRoomInDb(roomCode: string, update: Record<string, any>) {
+  try {
+    const db = await getDatabase()
+    const rooms = db.collection('rooms')
+    await rooms.updateOne({ roomCode }, { $set: update })
+  } catch (error) {
+    console.error('[v0] Room DB update error:', error)
+  }
+}
+
+function serializeRoomState(room: RoomState) {
+  const { liveStateVersion, ...rest } = room
+  return {
+    ...rest,
+    usedAnswers: Array.from(room.usedAnswers),
+    lastSeen: {},
+    privateNotices: {},
+    voiceSignals: [],
+  }
+}
+
+function hydrateRoomState(roomCode: string, rawState: any): RoomState {
+  const base = createRoom(roomCode)
+  const merged = { ...base, ...rawState, roomCode }
+  const hydratedLastSeen: Record<string, number> = {}
+  if (Array.isArray(merged.players)) {
+    const now = Date.now()
+    merged.players.forEach((player: PlayerState) => {
+      hydratedLastSeen[player.id] = now
+    })
+  }
+  return {
+    ...merged,
+    usedAnswers: new Set(Array.isArray(rawState?.usedAnswers) ? rawState.usedAnswers : []),
+    lastSeen: hydratedLastSeen,
+    privateNotices: {},
+    voiceSignals: [],
+    liveStateVersion: Number(rawState?.liveStateVersion || 1),
+  }
+}
+
+async function loadRoomState(roomCode: string): Promise<RoomState | null> {
+  try {
+    const db = await getDatabase()
+    const rooms = db.collection('rooms')
+    const room = await rooms.findOne({ roomCode })
+    if (!room?.liveState) return null
+    const hydrated = hydrateRoomState(roomCode, room.liveState)
+    hydrated.liveStateVersion = Number(room.liveStateVersion || hydrated.liveStateVersion || 1)
+    return hydrated
+  } catch (error) {
+    console.error('[v0] Room DB load error:', error)
+    return null
+  }
+}
+
+async function saveRoomState(room: RoomState) {
+  const db = await getDatabase()
+  const rooms = db.collection('rooms')
+  const nextVersion = Math.max(1, Number(room.liveStateVersion || 1))
+
+  const result = await rooms.updateOne(
+    { roomCode: room.roomCode, liveStateVersion: nextVersion },
+    {
+      $set: {
+        liveState: serializeRoomState(room),
+        updatedAt: new Date(),
+      },
+      $inc: { liveStateVersion: 1 },
+    }
+  )
+
+  if (result.modifiedCount === 0) {
+    const latest = await rooms.findOne({ roomCode: room.roomCode }, { projection: { liveStateVersion: 1 } })
+    const latestVersion = Number(latest?.liveStateVersion || 0)
+
+    if (!latest?.liveStateVersion) {
+      await rooms.updateOne(
+        { roomCode: room.roomCode },
+        {
+          $set: {
+            liveState: serializeRoomState(room),
+            liveStateVersion: nextVersion + 1,
+            updatedAt: new Date(),
+          },
+        },
+        { upsert: true }
+      )
+      room.liveStateVersion = nextVersion + 1
+      return
+    }
+
+    const retry = await rooms.updateOne(
+      { roomCode: room.roomCode, liveStateVersion: latestVersion },
+      {
+        $set: {
+          liveState: serializeRoomState(room),
+          updatedAt: new Date(),
+        },
+        $inc: { liveStateVersion: 1 },
+      }
+    )
+
+    if (retry.modifiedCount === 0) {
+      console.warn('[v0] Room state save conflict, skipping save:', room.roomCode)
+      return
+    }
+
+    room.liveStateVersion = latestVersion + 1
+    return
+  }
+
+  room.liveStateVersion = nextVersion + 1
+}
+
+async function syncRoomPlayers(room: RoomState) {
+  await updateRoomInDb(room.roomCode, {
+    players: room.players.map(player => ({
+      id: player.id,
+      name: player.name,
+      character: player.character,
+      characterStyle: player.characterStyle,
+      score: player.score,
+    })),
+    updatedAt: new Date(),
+  })
+}
+
+async function setRoomStatus(room: RoomState, status: 'waiting' | 'playing' | 'finished') {
+  await updateRoomInDb(room.roomCode, {
+    status,
+    currentRound: room.currentRound,
+    maxRounds: room.maxRounds,
+    updatedAt: new Date(),
+  })
+}
+
+async function finalizeRoom(room: RoomState) {
+  const playersByScore = [...room.players]
+    .map(player => ({
+      id: player.id,
+      name: player.name,
+      character: player.character,
+      score: player.score,
+      wins: 0,
+    }))
+    .sort((a, b) => b.score - a.score)
+
+  const winner = playersByScore[0]?.name || ''
+
+  await updateRoomInDb(room.roomCode, {
+    status: 'finished',
+    currentRound: room.currentRound,
+    results: {
+      roomCode: room.roomCode,
+      players: playersByScore,
+      rounds: room.currentRound,
+      winner,
+    },
+    updatedAt: new Date(),
+  })
+}
 
 function normalizeAnswer(value: string) {
   return value.trim().toLowerCase()
@@ -145,14 +310,29 @@ function createRoom(roomCode: string): RoomState {
     promptPool: [...DEFAULT_PROMPTS],
     lastSeen: {},
     privateNotices: {},
+    liveStateVersion: 1,
   }
 }
 
-function getRoom(roomCode: string) {
-  if (!activeRooms.has(roomCode)) {
-    activeRooms.set(roomCode, createRoom(roomCode))
+async function getRoom(roomCode: string) {
+  if (activeRooms.has(roomCode)) {
+    return activeRooms.get(roomCode)!
   }
-  return activeRooms.get(roomCode)!
+
+  const fromDb = await loadRoomState(roomCode)
+  if (fromDb) {
+    activeRooms.set(roomCode, fromDb)
+    return fromDb
+  }
+
+  const created = createRoom(roomCode)
+  activeRooms.set(roomCode, created)
+  await updateRoomInDb(roomCode, {
+    liveState: serializeRoomState(created),
+    liveStateVersion: created.liveStateVersion,
+    updatedAt: new Date(),
+  })
+  return created
 }
 
 function getDrawer(room: RoomState) {
@@ -182,8 +362,9 @@ function touchPlayer(room: RoomState, playerId: string) {
   room.lastSeen[playerId] = Date.now()
 }
 
-function pruneInactivePlayers(room: RoomState) {
+async function pruneInactivePlayers(room: RoomState) {
   const now = Date.now()
+  const beforeCount = room.players.length
   const inactiveIds = Object.entries(room.lastSeen)
     .filter(([, lastSeen]) => now - lastSeen > PLAYER_INACTIVE_MS)
     .map(([playerId]) => playerId)
@@ -195,6 +376,11 @@ function pruneInactivePlayers(room: RoomState) {
   }
   if (room.players.length < MIN_PLAYERS_TO_START) {
     room.gameState = 'waiting'
+  }
+
+  if (inactiveIds.length > 0 || room.players.length !== beforeCount) {
+    await syncRoomPlayers(room)
+    await saveRoomState(room)
   }
 }
 
@@ -291,6 +477,9 @@ function endRound(room: RoomState) {
     score: player.score + (room.lastRoundScores[player.id] || 0),
   }))
   room.roundStartedAt = null
+  if (room.currentRound >= room.maxRounds) {
+    finalizeRoom(room)
+  }
 }
 
 function getTimeLeft(room: RoomState) {
@@ -302,24 +491,30 @@ function getTimeLeft(room: RoomState) {
 async function handleRoundTimeout(room: RoomState) {
   if (room.gameState === 'drawing' && getTimeLeft(room) <= 0) {
     endRound(room)
+    await syncRoomPlayers(room)
+    return true
   }
+  return false
 }
 
 async function handleChoosingTimeout(room: RoomState) {
-  if (room.gameState !== 'choosing' || !room.choosingStartedAt) return
+  if (room.gameState !== 'choosing' || !room.choosingStartedAt) return false
   const elapsed = Math.floor((Date.now() - room.choosingStartedAt) / 1000)
   if (elapsed >= 12 && room.wordChoices.length > 0) {
     startDrawing(room, room.wordChoices[0])
+    return true
   }
+  return false
 }
 
 async function autoAdvanceRound(room: RoomState) {
-  if (room.gameState !== 'round-end' || !room.roundEndedAt) return
+  if (room.gameState !== 'round-end' || !room.roundEndedAt) return false
   const elapsed = Math.floor((Date.now() - room.roundEndedAt) / 1000)
-  if (elapsed < 5) return
+  if (elapsed < 5) return false
   if (room.currentRound >= room.maxRounds) {
     room.gameState = 'finished'
-    return
+    await finalizeRoom(room)
+    return true
   }
   room.currentRound += 1
   room.currentDrawer = room.players.length ? (room.currentDrawer + 1) % room.players.length : 0
@@ -327,6 +522,8 @@ async function autoAdvanceRound(room: RoomState) {
   room.choosingStartedAt = Date.now()
   setTheme(room)
   await pickWordChoices(room)
+  await setRoomStatus(room, 'playing')
+  return true
 }
 
 export async function GET(request: NextRequest) {
@@ -337,16 +534,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing parameters' }, { status: 400 })
   }
 
-  const room = getRoom(roomCode)
+  const room = await getRoom(roomCode)
 
   if (room.players.some(player => player.id === userId)) {
     touchPlayer(room, userId)
   }
-  pruneInactivePlayers(room)
+  await pruneInactivePlayers(room)
 
-  await handleRoundTimeout(room)
-  await handleChoosingTimeout(room)
-  await autoAdvanceRound(room)
+  const didTimeout = await handleRoundTimeout(room)
+  const didChoose = await handleChoosingTimeout(room)
+  const didAdvance = await autoAdvanceRound(room)
+  if (didTimeout || didChoose || didAdvance) {
+    await saveRoomState(room)
+  }
 
   const isDrawer = getDrawer(room)?.id === userId
   const currentPrompt = room.currentPrompt
@@ -412,12 +612,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing parameters' }, { status: 400 })
   }
 
-  const room = getRoom(roomCode)
-  pruneInactivePlayers(room)
+  const room = await getRoom(roomCode)
+  await pruneInactivePlayers(room)
   if (room.players.some(player => player.id === userId)) {
     touchPlayer(room, userId)
   }
 
+  let dirty = false
   switch (type) {
     case 'join': {
       const exists = room.players.some(player => player.id === userId)
@@ -435,6 +636,8 @@ export async function POST(request: NextRequest) {
         }
         room.powerups[userId] = { reveal: 1, freeze: 1, double: 1, doubleArmed: false }
         touchPlayer(room, userId)
+        await syncRoomPlayers(room)
+        dirty = true
       }
       break
     }
@@ -446,7 +649,10 @@ export async function POST(request: NextRequest) {
       }
       if (room.players.length < MIN_PLAYERS_TO_START) {
         room.gameState = 'waiting'
+        await setRoomStatus(room, 'waiting')
       }
+      await syncRoomPlayers(room)
+      dirty = true
       break
     }
 
@@ -486,6 +692,9 @@ export async function POST(request: NextRequest) {
       room.gameState = 'choosing'
       room.choosingStartedAt = Date.now()
       await pickWordChoices(room, room.wordChoiceCount)
+      await setRoomStatus(room, 'playing')
+      await syncRoomPlayers(room)
+      dirty = true
       break
     }
 
@@ -497,6 +706,7 @@ export async function POST(request: NextRequest) {
         if (room.mysteryMode && room.currentPrompt) {
           room.drawerClues = await generateDrawerClues(room.currentPrompt.answer, room.currentTheme)
         }
+        dirty = true
       }
       break
     }
@@ -504,6 +714,8 @@ export async function POST(request: NextRequest) {
     case 'next-round': {
       if (room.currentRound >= room.maxRounds) {
         room.gameState = 'finished'
+        await finalizeRoom(room)
+        dirty = true
         break
       }
       room.currentRound += 1
@@ -512,6 +724,8 @@ export async function POST(request: NextRequest) {
       room.choosingStartedAt = Date.now()
       setTheme(room)
       await pickWordChoices(room, room.wordChoiceCount)
+      await setRoomStatus(room, 'playing')
+      dirty = true
       break
     }
 
@@ -563,10 +777,13 @@ export async function POST(request: NextRequest) {
         const allGuessed = nonDrawerPlayers.every(player => player.guessed)
         if (allGuessed) {
           endRound(room)
+          await syncRoomPlayers(room)
         }
+        dirty = true
       }
       if (!correct && isCloseGuess(normalizedGuess, normalizedAnswer)) {
         room.privateNotices[userId] = 'You are very close!'
+        dirty = true
       }
       break
     }
@@ -584,12 +801,14 @@ export async function POST(request: NextRequest) {
 
       room.revealCount += 1
       room.hints.push(hintText || `Hint: ${maskPrompt(room.currentPrompt.answer, room.revealCount)}`)
+      dirty = true
       break
     }
 
     case 'request-draw-tip': {
       if (!room.currentPrompt || room.gameState !== 'drawing') break
       room.drawTip = await generateDrawTip(room.currentPrompt.answer, room.currentTheme)
+      dirty = true
       break
     }
 
@@ -605,14 +824,17 @@ export async function POST(request: NextRequest) {
           room.revealCount += 1
           room.hints.push(`Reveal: ${maskPrompt(room.currentPrompt.answer, room.revealCount)}`)
         }
+        dirty = true
       }
       if (type === 'freeze') {
         powerup.freeze -= 1
         room.drawBonusSeconds += 5
+        dirty = true
       }
       if (type === 'double') {
         powerup.double -= 1
         powerup.doubleArmed = true
+        dirty = true
       }
       break
     }
@@ -626,12 +848,15 @@ export async function POST(request: NextRequest) {
             room.ghostFrames.shift()
           }
         }
+        dirty = true
       }
       break
     }
 
     case 'round-time-ended': {
       endRound(room)
+      await syncRoomPlayers(room)
+      dirty = true
       break
     }
 
@@ -640,6 +865,7 @@ export async function POST(request: NextRequest) {
       const signal = data?.signal
       if (to && signal) {
         room.voiceSignals.push({ to, from: userId, signal })
+        dirty = true
       }
       break
     }
@@ -650,6 +876,7 @@ export async function POST(request: NextRequest) {
       if (!voteFor || room.votes[userId]) break
       room.votes[userId] = voteFor
       room.voteCounts[voteFor] = (room.voteCounts[voteFor] || 0) + 1
+      dirty = true
       break
     }
 
@@ -660,6 +887,10 @@ export async function POST(request: NextRequest) {
   const privateNotice = room.privateNotices[userId] || null
   if (privateNotice) {
     delete room.privateNotices[userId]
+  }
+
+  if (dirty) {
+    await saveRoomState(room)
   }
 
   return NextResponse.json({
