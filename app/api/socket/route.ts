@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { calculateScore, validateGuess, ROUND_DURATION, MIN_PLAYERS_TO_START } from '@/lib/game-logic'
+import { calculateScore, validateGuess, isCloseGuess, ROUND_DURATION, MIN_PLAYERS_TO_START } from '@/lib/game-logic'
 import { DEFAULT_PROMPTS, generatePromptFromIndex, maskPrompt, PromptItem } from '@/lib/prompts'
 import { generateHint, generatePromptIdeas, moderateGuess, generateDrawerClues, generateDrawTip } from '@/lib/groq'
 
@@ -36,6 +36,8 @@ interface RoomState {
   audienceMode: boolean
   dailyChallenge: boolean
   currentTheme: string
+  themeMode: 'fixed' | 'random'
+  selectedTheme: string
   roundStartedAt: number | null
   choosingStartedAt: number | null
   roundEndedAt: number | null
@@ -60,6 +62,8 @@ interface RoomState {
   lastDrawerId: string | null
   promptSeed: number
   promptPool: PromptItem[]
+  lastSeen: Record<string, number>
+  privateNotices: Record<string, string>
 }
 
 const activeRooms = new Map<string, RoomState>()
@@ -81,6 +85,8 @@ const THEMES = [
   'Neon',
   'Weather',
 ]
+
+const PLAYER_INACTIVE_MS = 45000
 
 function normalizeAnswer(value: string) {
   return value.trim().toLowerCase()
@@ -111,6 +117,8 @@ function createRoom(roomCode: string): RoomState {
     audienceMode: false,
     dailyChallenge: false,
     currentTheme: THEMES[0],
+    themeMode: 'fixed',
+    selectedTheme: THEMES[0],
     roundStartedAt: null,
     choosingStartedAt: null,
     roundEndedAt: null,
@@ -135,6 +143,8 @@ function createRoom(roomCode: string): RoomState {
     lastDrawerId: null,
     promptSeed: 0,
     promptPool: [...DEFAULT_PROMPTS],
+    lastSeen: {},
+    privateNotices: {},
   }
 }
 
@@ -150,8 +160,42 @@ function getDrawer(room: RoomState) {
 }
 
 function setTheme(room: RoomState) {
-  const index = (room.currentRound + room.promptSeed) % THEMES.length
+  if (room.themeMode === 'fixed') {
+    room.currentTheme = THEMES.includes(room.selectedTheme) ? room.selectedTheme : THEMES[0]
+    return
+  }
+  const index = Math.floor(Math.random() * THEMES.length)
   room.currentTheme = THEMES[index]
+}
+
+function removePlayer(room: RoomState, playerId: string) {
+  room.players = room.players.filter(player => player.id !== playerId)
+  delete room.lastSeen[playerId]
+  delete room.powerups[playerId]
+  delete room.teams[playerId]
+  delete room.streaks[playerId]
+  delete room.votes[playerId]
+  delete room.privateNotices[playerId]
+}
+
+function touchPlayer(room: RoomState, playerId: string) {
+  room.lastSeen[playerId] = Date.now()
+}
+
+function pruneInactivePlayers(room: RoomState) {
+  const now = Date.now()
+  const inactiveIds = Object.entries(room.lastSeen)
+    .filter(([, lastSeen]) => now - lastSeen > PLAYER_INACTIVE_MS)
+    .map(([playerId]) => playerId)
+
+  inactiveIds.forEach(playerId => removePlayer(room, playerId))
+
+  if (room.currentDrawer >= room.players.length) {
+    room.currentDrawer = 0
+  }
+  if (room.players.length < MIN_PLAYERS_TO_START) {
+    room.gameState = 'waiting'
+  }
 }
 
 function assignTeam(room: RoomState, playerId: string) {
@@ -281,6 +325,7 @@ async function autoAdvanceRound(room: RoomState) {
   room.currentDrawer = room.players.length ? (room.currentDrawer + 1) % room.players.length : 0
   room.gameState = 'choosing'
   room.choosingStartedAt = Date.now()
+  setTheme(room)
   await pickWordChoices(room)
 }
 
@@ -294,6 +339,11 @@ export async function GET(request: NextRequest) {
 
   const room = getRoom(roomCode)
 
+  if (room.players.some(player => player.id === userId)) {
+    touchPlayer(room, userId)
+  }
+  pruneInactivePlayers(room)
+
   await handleRoundTimeout(room)
   await handleChoosingTimeout(room)
   await autoAdvanceRound(room)
@@ -306,6 +356,10 @@ export async function GET(request: NextRequest) {
   const voiceSignals = room.voiceSignals.filter(signal => signal.to === userId)
   if (voiceSignals.length > 0) {
     room.voiceSignals = room.voiceSignals.filter(signal => signal.to !== userId)
+  }
+  const privateNotice = room.privateNotices[userId] || null
+  if (privateNotice) {
+    delete room.privateNotices[userId]
   }
 
   return NextResponse.json({
@@ -325,6 +379,8 @@ export async function GET(request: NextRequest) {
       audienceMode: room.audienceMode,
       dailyChallenge: room.dailyChallenge,
       currentTheme: room.currentTheme,
+      themeMode: room.themeMode,
+      selectedTheme: room.selectedTheme,
       teamScores: room.teamScores,
       teams: room.teams,
       streaks: room.streaks,
@@ -333,6 +389,7 @@ export async function GET(request: NextRequest) {
       guesses: room.guesses,
       hints: room.hints,
       drawingData: room.drawingData,
+      privateNotice,
       maskedPrompt,
       promptDisplay: isDrawer && !room.mysteryMode ? currentPrompt?.display || '' : '',
       drawerClues: isDrawer ? room.drawerClues : [],
@@ -356,6 +413,10 @@ export async function POST(request: NextRequest) {
   }
 
   const room = getRoom(roomCode)
+  pruneInactivePlayers(room)
+  if (room.players.some(player => player.id === userId)) {
+    touchPlayer(room, userId)
+  }
 
   switch (type) {
     case 'join': {
@@ -373,12 +434,13 @@ export async function POST(request: NextRequest) {
           assignTeam(room, userId)
         }
         room.powerups[userId] = { reveal: 1, freeze: 1, double: 1, doubleArmed: false }
+        touchPlayer(room, userId)
       }
       break
     }
 
     case 'leave': {
-      room.players = room.players.filter(player => player.id !== userId)
+      removePlayer(room, userId)
       if (room.currentDrawer >= room.players.length) {
         room.currentDrawer = 0
       }
@@ -408,6 +470,10 @@ export async function POST(request: NextRequest) {
       room.mysteryMode = Boolean(data?.mysteryMode)
       room.audienceMode = Boolean(data?.audienceMode)
       room.dailyChallenge = Boolean(data?.dailyChallenge)
+      room.themeMode = data?.themeMode === 'random' ? 'random' : 'fixed'
+      if (room.themeMode === 'fixed' && typeof data?.selectedTheme === 'string' && THEMES.includes(data.selectedTheme)) {
+        room.selectedTheme = data.selectedTheme
+      }
       if (room.teamMode) {
         room.players.forEach(player => {
           if (!room.teams[player.id]) {
@@ -499,6 +565,9 @@ export async function POST(request: NextRequest) {
           endRound(room)
         }
       }
+      if (!correct && isCloseGuess(normalizedGuess, normalizedAnswer)) {
+        room.privateNotices[userId] = 'You are very close!'
+      }
       break
     }
 
@@ -588,6 +657,11 @@ export async function POST(request: NextRequest) {
       break
   }
 
+  const privateNotice = room.privateNotices[userId] || null
+  if (privateNotice) {
+    delete room.privateNotices[userId]
+  }
+
   return NextResponse.json({
     success: true,
     state: {
@@ -600,10 +674,13 @@ export async function POST(request: NextRequest) {
       drawDuration: room.drawDuration,
       wordChoiceCount: room.wordChoiceCount,
       language: room.language,
+      themeMode: room.themeMode,
+      selectedTheme: room.selectedTheme,
       timeLeft: getTimeLeft(room),
       guesses: room.guesses,
       hints: room.hints,
       drawingData: room.drawingData,
+      privateNotice,
       maskedPrompt: room.currentPrompt ? maskPrompt(room.currentPrompt.answer, room.revealCount) : '',
       promptDisplay: getDrawer(room)?.id === userId ? room.currentPrompt?.display || '' : '',
       wordChoices: getDrawer(room)?.id === userId ? room.wordChoices : [],

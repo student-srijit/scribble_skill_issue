@@ -13,8 +13,27 @@ export default function GamePage() {
   const router = useRouter()
   const params = useParams()
   const roomCode = params.roomCode as string
-  const { user } = useAuth()
+  const { user, isLoading } = useAuth()
   const canvasRef = useRef<{ clearCanvas: () => void; getImage: () => string }>(null)
+
+  const THEME_OPTIONS = [
+    'Random',
+    'Fantasy',
+    'Food',
+    'Animals',
+    'Space',
+    'Sports',
+    'Countries',
+    'Movies',
+    'Nature',
+    'Objects',
+    'Mythical',
+    'Ocean',
+    'Robots',
+    'Retro',
+    'Neon',
+    'Weather',
+  ]
 
   const playerInfo = useMemo(() => {
     if (!user) return undefined
@@ -43,12 +62,15 @@ export default function GamePage() {
     audienceMode: serverAudienceMode,
     dailyChallenge: serverDailyChallenge,
     currentTheme,
+    themeMode: serverThemeMode,
+    selectedTheme: serverSelectedTheme,
     teamScores,
     teams,
     streaks,
     powerups,
     wordChoices,
     hints,
+    privateNotice,
     drawerClues,
     drawTip,
     drawingData,
@@ -59,6 +81,7 @@ export default function GamePage() {
     lastPrompt,
     lastDrawerId,
     submitGuess,
+    leaveRoom,
     startGame,
     nextRound,
     sendDrawingData,
@@ -82,6 +105,8 @@ export default function GamePage() {
   const [mysteryMode, setMysteryMode] = useState(false)
   const [audienceMode, setAudienceMode] = useState(false)
   const [dailyChallenge, setDailyChallenge] = useState(false)
+  const [themeMode, setThemeMode] = useState<'fixed' | 'random'>('fixed')
+  const [selectedTheme, setSelectedTheme] = useState('Fantasy')
   const [isListening, setIsListening] = useState(false)
   const [showReplay, setShowReplay] = useState(false)
   const [replayIndex, setReplayIndex] = useState(0)
@@ -101,13 +126,13 @@ export default function GamePage() {
   }
 
   useEffect(() => {
-    if (!user) {
+    if (!isLoading && !user) {
       if (typeof window !== 'undefined') {
         localStorage.setItem('pendingRoom', roomCode)
       }
       router.push('/login')
     }
-  }, [user, router])
+  }, [user, isLoading, router])
 
   useEffect(() => {
     setDrawDuration(serverDrawDuration)
@@ -136,6 +161,14 @@ export default function GamePage() {
   useEffect(() => {
     setDailyChallenge(serverDailyChallenge)
   }, [serverDailyChallenge])
+
+  useEffect(() => {
+    setThemeMode(serverThemeMode)
+  }, [serverThemeMode])
+
+  useEffect(() => {
+    setSelectedTheme(serverSelectedTheme)
+  }, [serverSelectedTheme])
 
   useEffect(() => {
     // Check if current user is the drawer
@@ -293,7 +326,10 @@ export default function GamePage() {
             </div>
           </div>
           <button
-            onClick={() => router.push('/lobby')}
+            onClick={() => {
+              leaveRoom()
+              router.push('/lobby')
+            }}
             className="px-4 py-2 rounded-lg text-sm font-semibold text-gray-200 hover:bg-white/10 transition-colors"
           >
             Exit Game
@@ -364,6 +400,32 @@ export default function GamePage() {
                       </div>
                     </div>
 
+                    <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
+                      <label className="block text-xs uppercase tracking-widest text-gray-400 mb-3">Theme</label>
+                      <div className="flex flex-wrap gap-2">
+                        {THEME_OPTIONS.map(option => {
+                          const isRandom = option === 'Random'
+                          const isActive = isRandom ? themeMode === 'random' : themeMode === 'fixed' && selectedTheme === option
+                          return (
+                            <button
+                              key={option}
+                              onClick={() => {
+                                if (isRandom) {
+                                  setThemeMode('random')
+                                } else {
+                                  setThemeMode('fixed')
+                                  setSelectedTheme(option)
+                                }
+                              }}
+                              className={`px-3 py-2 rounded-full text-sm font-semibold transition-all ${isActive ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/40' : 'bg-white/10 text-gray-300 hover:bg-white/20'}`}
+                            >
+                              {option}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                       {[
                         { id: 'teamMode', label: 'Team Battle', state: teamMode, set: setTeamMode },
@@ -382,7 +444,7 @@ export default function GamePage() {
                     </div>
 
                     <button
-                      onClick={() => startGame({ drawDuration, wordChoiceCount, language, maxRounds, teamMode, mysteryMode, audienceMode, dailyChallenge })}
+                      onClick={() => startGame({ drawDuration, wordChoiceCount, language, maxRounds, teamMode, mysteryMode, audienceMode, dailyChallenge, themeMode, selectedTheme })}
                       className="glossy-button text-lg py-3 w-full"
                     >
                       Start Game
@@ -616,6 +678,11 @@ export default function GamePage() {
                     </div>
                   ))}
                 </div>
+                {privateNotice && (
+                  <div className="mb-3 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 p-2 rounded">
+                    {privateNotice}
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <input
                     type="text"

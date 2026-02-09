@@ -34,12 +34,15 @@ export interface GameRoomState {
   audienceMode: boolean
   dailyChallenge: boolean
   currentTheme: string
+  themeMode: 'fixed' | 'random'
+  selectedTheme: string
   teamScores: Record<'A' | 'B', number>
   teams: Record<string, 'A' | 'B'>
   streaks: Record<string, number>
   powerups: Record<string, { reveal: number; freeze: number; double: number; doubleArmed: boolean }>
   guesses: Array<{ player: string; guess: string; correct: boolean }>
   hints: string[]
+  privateNotice?: string | null
   drawerClues: string[]
   drawTip: string
   wordChoices: Array<{ answer: string; display: string }>
@@ -75,12 +78,15 @@ export function useGameState(
     audienceMode: false,
     dailyChallenge: false,
     currentTheme: 'Fantasy',
+    themeMode: 'fixed',
+    selectedTheme: 'Fantasy',
     teamScores: { A: 0, B: 0 },
     teams: {},
     streaks: {},
     powerups: {},
     guesses: [],
     hints: [],
+    privateNotice: null,
     drawerClues: [],
     drawTip: '',
     wordChoices: [],
@@ -117,9 +123,6 @@ export function useGameState(
     gameSocket.on('state-sync', handleStateSync)
 
     return () => {
-      if (playerInfo?.name) {
-        gameSocket.send('leave', { playerId: userId })
-      }
       gameSocket.off('state-sync', handleStateSync)
       gameSocket.disconnect()
     }
@@ -133,7 +136,11 @@ export function useGameState(
     gameSocket.send('submit-guess', { guess, playerId: userId, playerName })
   }, [userId])
 
-  const startGame = useCallback((options?: { drawDuration?: number; wordChoiceCount?: number; language?: 'en' | 'hi'; maxRounds?: number; teamMode?: boolean; mysteryMode?: boolean; audienceMode?: boolean; dailyChallenge?: boolean }) => {
+  const leaveRoom = useCallback(() => {
+    gameSocket.send('leave', { playerId: userId })
+  }, [userId])
+
+  const startGame = useCallback((options?: { drawDuration?: number; wordChoiceCount?: number; language?: 'en' | 'hi'; maxRounds?: number; teamMode?: boolean; mysteryMode?: boolean; audienceMode?: boolean; dailyChallenge?: boolean; themeMode?: 'fixed' | 'random'; selectedTheme?: string }) => {
     gameSocket.send('start-game', {
       roomCode,
       maxRounds: options?.maxRounds ?? gameState.maxRounds,
@@ -144,6 +151,8 @@ export function useGameState(
       mysteryMode: options?.mysteryMode ?? gameState.mysteryMode,
       audienceMode: options?.audienceMode ?? gameState.audienceMode,
       dailyChallenge: options?.dailyChallenge ?? gameState.dailyChallenge,
+      themeMode: options?.themeMode ?? gameState.themeMode,
+      selectedTheme: options?.selectedTheme ?? gameState.selectedTheme,
     })
   }, [
     roomCode,
@@ -155,6 +164,8 @@ export function useGameState(
     gameState.mysteryMode,
     gameState.audienceMode,
     gameState.dailyChallenge,
+    gameState.themeMode,
+    gameState.selectedTheme,
   ])
 
   const nextRound = useCallback(() => {
@@ -193,6 +204,7 @@ export function useGameState(
     ...gameState,
     connected,
     submitGuess,
+    leaveRoom,
     startGame,
     nextRound,
     sendDrawingData,

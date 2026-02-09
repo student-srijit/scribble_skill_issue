@@ -20,7 +20,7 @@ interface GameRoom {
 
 export default function LobbyPage() {
   const router = useRouter()
-  const { user, logout } = useAuth()
+  const { user, isLoading, logout } = useAuth()
   const [publicRooms, setPublicRooms] = useState<GameRoom[]>([])
   const [showCreateRoom, setShowCreateRoom] = useState(false)
   const [showJoinRoom, setShowJoinRoom] = useState(false)
@@ -32,7 +32,7 @@ export default function LobbyPage() {
   const [rooms, setRooms] = useState<GameRoom[]>([]); // Declare rooms variable
 
   useEffect(() => {
-    if (!user) {
+    if (!isLoading && !user) {
       router.push('/login')
     }
     fetchPublicRooms()
@@ -40,7 +40,7 @@ export default function LobbyPage() {
     // Poll for room updates every 5 seconds
     const pollInterval = setInterval(fetchPublicRooms, 5000)
     return () => clearInterval(pollInterval)
-  }, [user, router])
+  }, [user, isLoading, router])
 
   const fetchPublicRooms = async () => {
     try {

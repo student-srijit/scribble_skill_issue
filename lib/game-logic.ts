@@ -54,6 +54,55 @@ export function validateGuess(guess: string, prompt: string): boolean {
   return matches.length >= Math.ceil(promptWords.length / 2)
 }
 
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0
+  const aLen = a.length
+  const bLen = b.length
+  if (aLen === 0) return bLen
+  if (bLen === 0) return aLen
+
+  const prev = new Array(bLen + 1).fill(0)
+  const curr = new Array(bLen + 1).fill(0)
+
+  for (let j = 0; j <= bLen; j += 1) {
+    prev[j] = j
+  }
+
+  for (let i = 1; i <= aLen; i += 1) {
+    curr[0] = i
+    const aChar = a[i - 1]
+    for (let j = 1; j <= bLen; j += 1) {
+      const cost = aChar === b[j - 1] ? 0 : 1
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost
+      )
+    }
+    for (let j = 0; j <= bLen; j += 1) {
+      prev[j] = curr[j]
+    }
+  }
+
+  return prev[bLen]
+}
+
+export function isCloseGuess(guess: string, prompt: string): boolean {
+  const normalizedGuess = guess.toLowerCase().trim()
+  const normalizedPrompt = prompt.toLowerCase().trim()
+  if (!normalizedGuess || !normalizedPrompt) return false
+  if (normalizedGuess === normalizedPrompt) return false
+
+  if (Math.abs(normalizedGuess.length - normalizedPrompt.length) > 3) return false
+
+  const distance = levenshteinDistance(normalizedGuess, normalizedPrompt)
+  const maxLen = Math.max(normalizedGuess.length, normalizedPrompt.length)
+  if (maxLen === 0) return false
+
+  const similarity = 1 - distance / maxLen
+  return (distance <= 2 && similarity >= 0.75) || similarity >= 0.82
+}
+
 export function getRoundLeaderboard(players: any[], scores: Record<string, number>) {
   return players
     .map(player => ({
