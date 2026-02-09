@@ -1,22 +1,11 @@
-import { MongoClient } from 'mongodb'
 import { NextRequest, NextResponse } from 'next/server'
-
-const client = new MongoClient(process.env.MONGODB_URI!)
-let db: any
-
-async function connectDB() {
-  if (!db) {
-    await client.connect()
-    db = client.db(process.env.MONGODB_DB)
-  }
-  return db
-}
+import { getDatabase } from '@/lib/db'
 
 export async function POST(request: NextRequest) {
   try {
     const { roomCode, userId, username, selectedCharacter, characterStyle } = await request.json()
 
-    const database = await connectDB()
+    const database = await getDatabase()
     const roomsCollection = database.collection('rooms')
 
     const room = await roomsCollection.findOne({ roomCode })
